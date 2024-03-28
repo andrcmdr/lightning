@@ -12,14 +12,14 @@ derive_more = "0.99"
 fn-sdk = { path = "../../lib/sdk" }
 hex = "0.4"
 ndarray = "0.15"
-ort = { version = "2.0.0-rc.0", features = ["custom-ops"] }
 safetensors = "0.4"
 safetensors-ndarray = { path = "../../lib/safetensors-ndarray" }
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = [ "env-filter" ] }
-tokio.workspace = true
+tract-onnx = { git = "https://github.com/sonos/tract" }
 url ="2.5.0"
 
 [[bin]]

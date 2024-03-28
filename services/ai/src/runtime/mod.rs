@@ -3,11 +3,12 @@ mod model;
 mod serialize;
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use anyhow::bail;
 use bytes::Bytes;
-use ort::{TensorElementType, ValueType};
+use tract_onnx::prelude;
+use tract_onnx::prelude::{Framework, InferenceFact, InferenceModel, RunnableModel};
+use tract_onnx::tract_hir::infer::InferenceOp;
 
 use crate::opts::{BorshVector, Encoding};
 use crate::runtime::model::Info;
@@ -20,19 +21,17 @@ const ORT_EXTENSIONS_LIB_PATH: &str = "~/.lightning/onnx/libortextensions.dylib"
 
 pub struct Session {
     /// The Onnx Runtime Session.
-    onnx: ort::Session,
+    onnx: RunnableModel<InferenceFact, Box<dyn InferenceOp>, InferenceModel>,
     /// Encoding that will be used for the input and output throughout the session.
     encoding: Encoding,
 }
 
 impl Session {
-    pub fn new(model: Bytes, encoding: Encoding) -> anyhow::Result<Self> {
-        let mut builder = ort::Session::builder()?;
-        if Path::new(ORT_EXTENSIONS_LIB_PATH).exists() {
-            builder = builder.with_custom_ops_lib(ORT_EXTENSIONS_LIB_PATH)?
-        }
+    pub fn new(mut model: Bytes, encoding: Encoding) -> anyhow::Result<Self> {
         Ok(Self {
-            onnx: builder.with_model_from_memory(model.as_ref())?,
+            onnx: tract_onnx::onnx()
+                .model_for_read(&mut model)?
+                .into_runnable()?,
             encoding,
         })
     }
@@ -47,61 +46,17 @@ impl Session {
         let output = match self.encoding {
             Encoding::Borsh => {
                 let session_input = deserialize::deserialize_borsh(input)?;
-                let session_outputs = self.onnx.run(session_input)?;
+                let session_outputs = self.onnx.run(prelude::tvec!(session_input.into()))?;
                 RunOutput::Borsh(serialize::borsh_serialize_outputs(session_outputs)?)
             },
             Encoding::SafeTensors => {
                 let session_input = deserialize::deserialize_safetensors(input)?;
-                let session_outputs = self.onnx.run(session_input)?;
+                let session_outputs = self.onnx.run(prelude::tvec!(session_input.into()))?;
                 RunOutput::SafeTensors(serialize::safetensors_serialize_outputs(session_outputs)?)
             },
         };
 
         Ok(output)
-    }
-
-    pub fn model_info(&self) -> anyhow::Result<Info> {
-        let mut name = None;
-        let mut description = None;
-        let mut producer = None;
-
-        let meta = self.onnx.metadata()?;
-        if let Ok(mode_name) = meta.name() {
-            name = Some(mode_name);
-        }
-        if let Ok(desc) = meta.description() {
-            description = Some(desc);
-        }
-        if let Ok(prod) = meta.producer() {
-            producer = Some(prod);
-        }
-
-        let mut inputs = Vec::new();
-        for (i, input) in self.onnx.inputs.iter().enumerate() {
-            let input = format!(
-                "{i} {}: {}",
-                input.name,
-                value_type_to_string(&input.input_type)
-            );
-            inputs.push(input);
-        }
-        let mut outputs = Vec::new();
-        for (i, output) in self.onnx.outputs.iter().enumerate() {
-            let output = format!(
-                "{i} {}: {}",
-                output.name,
-                value_type_to_string(&output.output_type)
-            );
-            outputs.push(output);
-        }
-
-        Ok(Info {
-            name,
-            description,
-            producer,
-            inputs,
-            outputs,
-        })
     }
 }
 
@@ -110,35 +65,3 @@ pub enum RunOutput {
     Borsh(HashMap<String, BorshVector>),
 }
 
-fn element_type_to_str(t: TensorElementType) -> &'static str {
-    match t {
-        TensorElementType::Bfloat16 => "bf16",
-        TensorElementType::Bool => "bool",
-        TensorElementType::Float16 => "f16",
-        TensorElementType::Float32 => "f32",
-        TensorElementType::Float64 => "f64",
-        TensorElementType::Int16 => "i16",
-        TensorElementType::Int32 => "i32",
-        TensorElementType::Int64 => "i64",
-        TensorElementType::Int8 => "i8",
-        TensorElementType::String => "str",
-        TensorElementType::Uint16 => "u16",
-        TensorElementType::Uint32 => "u32",
-        TensorElementType::Uint64 => "u64",
-        TensorElementType::Uint8 => "u8",
-    }
-}
-
-fn value_type_to_string(value: &ValueType) -> String {
-    match value {
-        ValueType::Tensor { ty, dimensions } => {
-            format!("Tensor<{}>({:?})", element_type_to_str(*ty), dimensions)
-        },
-        ValueType::Map { key, value } => format!(
-            "Map<{}, {}>",
-            element_type_to_str(*key),
-            element_type_to_str(*value)
-        ),
-        ValueType::Sequence(_) => "Sequence<_>".to_string(),
-    }
-}
