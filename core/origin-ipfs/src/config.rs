@@ -26,6 +26,10 @@ impl Default for Config {
             gateways: vec![
                 Gateway {
                     protocol: Protocol::Https,
+                    authority: "cf-ipfs.com".to_string(),
+                },
+                Gateway {
+                    protocol: Protocol::Https,
                     authority: "fleek.ipfs.io".to_string(),
                 },
                 Gateway {
