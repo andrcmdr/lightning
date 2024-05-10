@@ -20,9 +20,11 @@ use lightning_final_bindings::FinalTypes;
 use lightning_handshake::config::{HandshakeConfig, TransportConfig};
 use lightning_handshake::handshake::Handshake;
 use lightning_handshake::transports::webrtc::WebRtcConfig;
+use lightning_interfaces::fdi::MultiThreadedProvider;
 use lightning_interfaces::prelude::*;
 use lightning_interfaces::types::{HandshakePorts, NodePorts};
 use lightning_keystore::{Keystore, KeystoreConfig};
+use lightning_node::ContainedNode;
 use lightning_pinger::{Config as PingerConfig, Pinger};
 use lightning_pool::{Config as PoolConfig, PoolProvider};
 use lightning_rep_collector::config::Config as RepAggConfig;
@@ -211,12 +213,11 @@ async fn node_checkpointing() -> Result<()> {
     let config = build_config(&path, genesis, signer_config, node_ports);
     let app_config = config.get::<<FinalTypes as Collection>::ApplicationInterface>();
 
-    let mut node = Node::<FinalTypes>::init(config.clone())
-        .map_err(|e| anyhow::anyhow!("Node Initialization failed: {e:?}"))
-        .context("Could not start the node.")?;
+    let provider = MultiThreadedProvider::default();
+    provider.insert(config.clone());
+    let mut node = ContainedNode::<FinalTypes>::new(provider, None);
 
-    println!("HERE");
-    node.start().await;
+    node.spawn().await??;
 
     let shutdown_future = shutdown_controller.wait_for_shutdown();
     pin!(shutdown_future);
@@ -228,7 +229,6 @@ async fn node_checkpointing() -> Result<()> {
         tokio::select! {
             _ = &mut shutdown_future => break,
             _ = interval.tick() => {
-                println!("HERE 2");
 
                 // wait for node to start
                 tokio::time::sleep(Duration::from_secs(30)).await;
@@ -236,16 +236,14 @@ async fn node_checkpointing() -> Result<()> {
                 // shutdown the node
                 node.shutdown().await;
 
-                std::mem::drop(node);
-
                 // start local env in checkpoint mode to seed database with the new checkpoint
                 <FinalTypes as Collection>::ApplicationInterface::load_from_checkpoint(
                     &app_config, checkpoint.clone(), *checkpoint_hash.as_bytes()).await?;
 
-                node = Node::<FinalTypes>::init(config.clone())
-                    .map_err(|e| anyhow::anyhow!("Could not start the node: {e:?}"))?;
-
-                node.start().await;
+                let provider = MultiThreadedProvider::default();
+                provider.insert(config.clone());
+                node = ContainedNode::<FinalTypes>::new(provider, None);
+                node.spawn().await??;
 
                 count += 1;
                 if count > NUM_RESTARTS {
